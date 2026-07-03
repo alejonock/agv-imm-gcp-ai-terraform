@@ -1,0 +1,31 @@
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars        # ← NUNCA subas esto a Git (contiene secretos)
+terraform/tfplan
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/crash.log
+
+# Bootstrap (state local del bootstrap, no va a Git)
+terraform/bootstrap/.terraform/
+terraform/bootstrap/.terraform.lock.hcl
+terraform/bootstrap/bootstrap.tfvars   # ← tampoco subas esto
+terraform/bootstrap/bootstrap.tfstate
+terraform/bootstrap/bootstrap.tfstate.backup
+terraform/bootstrap/crash.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+venv/
+
+# GCP credenciales
+sa-key.json
+*.json
+
+# Sistema
+.DS_Store
+.env

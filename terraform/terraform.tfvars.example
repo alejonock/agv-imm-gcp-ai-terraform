@@ -1,0 +1,33 @@
+# =============================================================================
+# terraform.tfvars.example
+#
+# INSTRUCCIONES:
+#   1. Copia este archivo: cp terraform.tfvars.example terraform.tfvars
+#   2. Rellena los valores con los datos de TU proyecto
+#   3. NUNCA subas terraform.tfvars a Git (contiene secretos)
+#      El .gitignore ya lo excluye si usas el que viene en este proyecto.
+# =============================================================================
+
+# Tu Project ID de GCP (lo ves en la consola de GCP o con: gcloud config get-value project)
+project_id = "alejandrogallego-2601"
+
+# Región donde desplegar todo
+region = "europe-west1"
+
+# Nombre del bucket que guarda el Terraform state.
+# Creado previamente con: cd terraform/bootstrap && terraform apply
+# Debe coincidir con el que pasas en: terraform init -backend-config="bucket=..."
+state_bucket_name = "alejandrogallego-2601-tf-state"
+
+# Nombre del bucket para el código del backend
+bucket_name = "alejandrogallego-2601-ia-backend-src"
+
+# Imagen Docker del proxy (se construye y sube en la pipeline de CI/CD)
+# Formato: gcr.io/TU_PROYECTO/oauth-proxy:TAG
+cloud_run_image = "gcr.io/alejandrogallego-2601/oauth-proxy:latest"
+
+# Clave secreta compartida con Jira (cámbiala por algo seguro)
+# Jira la enviará en la cabecera: X-API-Key: <este valor>
+jira_api_key = "claveparajira-conexion-2026"
+
+# --- Opcionales (tienen valores por defecto en variables.tf) ---

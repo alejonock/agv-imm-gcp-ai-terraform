@@ -1,0 +1,154 @@
+# =============================================================================
+# CONFIGURACIÓN PREVIA (una sola vez):
+#
+#   1. Conecta tu repo en GCP Console → Cloud Build → Triggers
+#   2. Crea un Trigger con:
+#        Evento: "Push to a branch" → rama "main"
+#        Archivo de configuración: cloudbuild.yaml
+#
+#   3. Dale permisos a la cuenta de servicio de Cloud Build:
+#        NUMERO=$(gcloud projects describe TU_PROYECTO --format='value(projectNumber)')
+#        CB_SA="${NUMERO}@cloudbuild.gserviceaccount.com"
+#
+#        gcloud projects add-iam-policy-binding TU_PROYECTO \
+#          --member="serviceAccount:${CB_SA}" --role="roles/editor"
+#
+#        gsutil iam ch serviceAccount:${CB_SA}:roles/storage.admin \
+#          gs://TU_STATE_BUCKET
+#
+# VARIABLES DE SUSTITUCIÓN (configúralas en el Trigger de Cloud Build):
+#   _TF_STATE_BUCKET    → nombre del bucket del state (ej: "mi-proyecto-tf-state")
+#   _BUCKET_NAME        → nombre del bucket del código del backend
+#   _JIRA_API_KEY       → clave secreta para Jira
+#   _REGION             → región GCP (ej: europe-west1)
+# =============================================================================
+
+substitutions:
+  _REGION: "europe-west1"
+  _TF_VERSION: "1.7.0"
+
+steps:
+
+  # ---------------------------------------------------------------------------
+  # PASO 1 y 2 (en paralelo): Build Docker + Upload código backend
+  # ---------------------------------------------------------------------------
+
+  - id: "build-proxy-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -t
+      - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
+      - -t
+      - "gcr.io/$PROJECT_ID/oauth-proxy:latest"
+      - ./cloud_run_proxy
+    waitFor: ["-"]   # Empieza inmediatamente (sin esperar otros pasos)
+
+  - id: "push-proxy-image"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "gcr.io/$PROJECT_ID/oauth-proxy"]
+    waitFor: ["build-proxy-image"]
+
+  - id: "upload-backend-code"
+    name: "gcr.io/cloud-builders/gsutil"
+    args: ["-m", "cp", "-r", "backend_gce/*", "gs://$_BUCKET_NAME/backend_gce/"]
+    waitFor: ["-"]   # También corre en paralelo con el build Docker
+
+  # ---------------------------------------------------------------------------
+  # PASO 3: Garantiza que el bucket del Terraform state existe
+  # ---------------------------------------------------------------------------
+
+  - id: "ensure-state-bucket"
+    name: "gcr.io/cloud-builders/gsutil"
+    entrypoint: "bash"
+    args:
+      - -c
+      - |
+        BUCKET="gs://$_TF_STATE_BUCKET"
+        if gsutil ls "$$BUCKET" > /dev/null 2>&1; then
+          echo "✅ Bucket del state ya existe: $$BUCKET"
+        else
+          echo "🆕 Creando bucket del state: $$BUCKET"
+          gsutil mb -l $_REGION "$$BUCKET"
+          gsutil versioning set on "$$BUCKET"
+          echo "✅ Bucket creado y versionado activado"
+        fi
+    waitFor: ["-"]   # También corre en paralelo
+
+  # ---------------------------------------------------------------------------
+  # PASO 4: Terraform Init
+  # Conecta al state remoto pasando el bucket con -backend-config.
+  # No hay ningún valor hardcodeado en el código Terraform.
+  # ---------------------------------------------------------------------------
+
+  - id: "terraform-init"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    entrypoint: "sh"
+    args:
+      - -c
+      - |
+        terraform init \
+          -backend-config="bucket=$_TF_STATE_BUCKET" \
+          -input=false
+        echo "✅ Terraform conectado al state en gs://$_TF_STATE_BUCKET/ia-gcp/state"
+    waitFor: ["push-proxy-image", "upload-backend-code", "ensure-state-bucket"]
+
+  # ---------------------------------------------------------------------------
+  # PASO 5: Crear terraform.tfvars a partir de las variables del Trigger
+  # ---------------------------------------------------------------------------
+
+  - id: "create-tfvars"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    entrypoint: "sh"
+    args:
+      - -c
+      - |
+        cat > terraform.tfvars <<EOF
+        project_id        = "$PROJECT_ID"
+        region            = "$_REGION"
+        state_bucket_name = "$_TF_STATE_BUCKET"
+        bucket_name       = "$_BUCKET_NAME"
+        jira_api_key      = "$_JIRA_API_KEY"
+        cloud_run_image   = "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
+        EOF
+        echo "✅ terraform.tfvars generado"
+    waitFor: ["terraform-init"]
+
+  # ---------------------------------------------------------------------------
+  # PASO 6-8: Validate → Plan → Apply
+  # ---------------------------------------------------------------------------
+
+  - id: "terraform-validate"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    args: ["validate"]
+    waitFor: ["create-tfvars"]
+
+  - id: "terraform-plan"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    args: ["plan", "-out=tfplan", "-input=false"]
+    waitFor: ["terraform-validate"]
+
+  - id: "terraform-apply"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    args: ["apply", "-auto-approve", "-input=false", "tfplan"]
+    waitFor: ["terraform-plan"]
+
+  - id: "terraform-output"
+    name: "hashicorp/terraform:$_TF_VERSION"
+    dir: "terraform"
+    args: ["output"]
+    waitFor: ["terraform-apply"]
+
+images:
+  - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
+  - "gcr.io/$PROJECT_ID/oauth-proxy:latest"
+
+timeout: "1800s"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
