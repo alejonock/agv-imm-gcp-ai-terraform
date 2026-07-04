@@ -15,7 +15,7 @@ substitutions:
 steps:
 
   # ---------------------------------------------------------------------------
-  # BLOQUE A — Corren todos en paralelo desde el inicio
+  # BLOQUE A — Los tres corren en paralelo desde el inicio
   # ---------------------------------------------------------------------------
 
   # A1: Construye la imagen Docker del proxy OAuth
@@ -37,6 +37,7 @@ steps:
     args:
       - -c
       - |
+        set -e
         BUCKET="gs://$_TF_STATE_BUCKET"
         if gsutil ls "$$BUCKET" > /dev/null 2>&1; then
           echo "✅ Bucket del state ya existe: $$BUCKET"
@@ -55,6 +56,7 @@ steps:
     args:
       - -c
       - |
+        set -e
         BUCKET="gs://$_BUCKET_NAME"
         if gsutil ls "$$BUCKET" > /dev/null 2>&1; then
           echo "✅ Bucket del backend ya existe: $$BUCKET"
@@ -82,29 +84,27 @@ steps:
     waitFor: ["ensure-backend-bucket"]
 
   # ---------------------------------------------------------------------------
-  # BLOQUE C — Terraform (espera a que B1, B2 y el state bucket estén listos)
+  # BLOQUE C — Terraform completo en un solo paso
+  #
+  # ¿Por qué un solo paso?
+  #   Cada paso de Cloud Build corre en un contenedor aislado. Terraform
+  #   descarga los providers durante "init" al directorio .terraform/.
+  #   Si init y validate corren en contenedores distintos, el segundo
+  #   contenedor arranca sin los providers ya descargados y falla.
+  #   Al correr todo en un mismo paso con "set -e", cualquier error
+  #   detiene la ejecución inmediatamente y los providers siempre están
+  #   disponibles para los comandos siguientes.
   # ---------------------------------------------------------------------------
-
-  - id: "terraform-init"
+  - id: "terraform-deploy"
     name: "hashicorp/terraform:$_TF_VERSION"
     dir: "terraform"
     entrypoint: "sh"
     args:
       - -c
       - |
-        terraform init \
-          -backend-config="bucket=$_TF_STATE_BUCKET" \
-          -input=false
-        echo "✅ Terraform conectado al state en gs://$_TF_STATE_BUCKET/ia-gcp/state"
-    waitFor: ["push-proxy-image", "upload-backend-code", "ensure-state-bucket"]
+        set -e   # Detiene el script inmediatamente si cualquier comando falla
 
-  - id: "create-tfvars"
-    name: "hashicorp/terraform:$_TF_VERSION"
-    dir: "terraform"
-    entrypoint: "sh"
-    args:
-      - -c
-      - |
+        echo "━━━ [1/5] Generando terraform.tfvars ━━━"
         cat > terraform.tfvars <<EOF
         project_id        = "$PROJECT_ID"
         region            = "$_REGION"
@@ -114,31 +114,31 @@ steps:
         cloud_run_image   = "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
         EOF
         echo "✅ terraform.tfvars generado"
-    waitFor: ["terraform-init"]
 
-  - id: "terraform-validate"
-    name: "hashicorp/terraform:$_TF_VERSION"
-    dir: "terraform"
-    args: ["validate"]
-    waitFor: ["create-tfvars"]
+        echo ""
+        echo "━━━ [2/5] Terraform Init (descarga providers + conecta al state) ━━━"
+        terraform init \
+          -backend-config="bucket=$_TF_STATE_BUCKET" \
+          -input=false
+        echo "✅ Init completado"
 
-  - id: "terraform-plan"
-    name: "hashicorp/terraform:$_TF_VERSION"
-    dir: "terraform"
-    args: ["plan", "-out=tfplan", "-input=false"]
-    waitFor: ["terraform-validate"]
+        echo ""
+        echo "━━━ [3/5] Terraform Validate ━━━"
+        terraform validate
+        echo "✅ Validación correcta"
 
-  - id: "terraform-apply"
-    name: "hashicorp/terraform:$_TF_VERSION"
-    dir: "terraform"
-    args: ["apply", "-auto-approve", "-input=false", "tfplan"]
-    waitFor: ["terraform-plan"]
+        echo ""
+        echo "━━━ [4/5] Terraform Plan ━━━"
+        terraform plan -out=tfplan -input=false
 
-  - id: "terraform-output"
-    name: "hashicorp/terraform:$_TF_VERSION"
-    dir: "terraform"
-    args: ["output"]
-    waitFor: ["terraform-apply"]
+        echo ""
+        echo "━━━ [5/5] Terraform Apply ━━━"
+        terraform apply -auto-approve -input=false tfplan
+
+        echo ""
+        echo "━━━ Outputs de la infraestructura ━━━"
+        terraform output
+    waitFor: ["push-proxy-image", "upload-backend-code", "ensure-state-bucket"]
 
 images:
   - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
