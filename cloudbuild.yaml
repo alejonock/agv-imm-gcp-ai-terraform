@@ -2,14 +2,12 @@
 # cloudbuild.yaml
 #
 # PRE-REQUISITO (una sola vez antes de la primera ejecución):
-#   Crea el bucket del Terraform state manualmente:
-#
 #   gsutil mb -l europe-west1 gs://TU_PROYECTO-tf-state
 #   gsutil versioning set on gs://TU_PROYECTO-tf-state
 #
-# VARIABLES DE SUSTITUCIÓN (configúralas en el Trigger de Cloud Build):
-#   _TF_STATE_BUCKET  → nombre del bucket del state (ej: "mi-proyecto-tf-state")
-#   _BUCKET_NAME      → nombre del bucket del código del backend
+# VARIABLES DE SUSTITUCIÓN en el Trigger de Cloud Build:
+#   _TF_STATE_BUCKET  → bucket del Terraform state  (ej: "mi-proyecto-tf-state")
+#   _BUCKET_NAME      → bucket del código del backend
 #   _JIRA_API_KEY     → clave secreta compartida con Jira
 #   _REGION           → región GCP (default: europe-west1)
 # =============================================================================
@@ -21,7 +19,7 @@ substitutions:
 steps:
 
   # ---------------------------------------------------------------------------
-  # BLOQUE A — Los tres corren en paralelo desde el inicio
+  # BLOQUE A — Corren en paralelo desde el inicio
   # ---------------------------------------------------------------------------
 
   # A1: Construye la imagen Docker del proxy OAuth
@@ -54,6 +52,25 @@ steps:
         fi
     waitFor: ["-"]
 
+  # A3: Obtiene el access token del SA de Cloud Build
+  # ---------------------------------------------------
+  # El contenedor de hashicorp/terraform es Alpine Linux y NO tiene
+  # acceso automático a las credenciales de GCP. Este paso usa la imagen
+  # oficial de Google Cloud SDK (que SÍ tiene acceso nativo a las
+  # credenciales de Cloud Build) para obtener el token y guardarlo
+  # en /workspace/gcp_token.txt, que es un directorio compartido entre
+  # todos los pasos del mismo build.
+  - id: "get-gcp-token"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "bash"
+    args:
+      - -c
+      - |
+        set -e
+        gcloud auth print-access-token > /workspace/gcp_token.txt
+        echo "✅ Access token obtenido y guardado en /workspace/gcp_token.txt"
+    waitFor: ["-"]
+
   # ---------------------------------------------------------------------------
   # BLOQUE B — Dependen del bloque A
   # ---------------------------------------------------------------------------
@@ -71,11 +88,11 @@ steps:
     waitFor: ["ensure-backend-bucket"]
 
   # ---------------------------------------------------------------------------
-  # BLOQUE C — Terraform completo en un solo paso
+  # BLOQUE C — Terraform (espera a que todo el bloque B y el token estén listos)
   #
-  # Todo en un contenedor para que los providers descargados en "init"
-  # estén disponibles en validate, plan y apply.
-  # set -e detiene todo si cualquier comando falla.
+  # Lee el token de /workspace/gcp_token.txt y lo exporta como
+  # GOOGLE_OAUTH_ACCESS_TOKEN para que Terraform (backend GCS + provider
+  # google) se autentique con las credenciales del SA de Cloud Build.
   # ---------------------------------------------------------------------------
   - id: "terraform-deploy"
     name: "hashicorp/terraform:$_TF_VERSION"
@@ -86,6 +103,11 @@ steps:
       - |
         set -e
 
+        echo "━━━ Cargando credenciales GCP ━━━"
+        export GOOGLE_OAUTH_ACCESS_TOKEN=$(cat /workspace/gcp_token.txt)
+        echo "✅ Credenciales cargadas"
+
+        echo ""
         echo "━━━ [1/5] Generando terraform.tfvars ━━━"
         cat > terraform.tfvars <<EOF
         project_id        = "$PROJECT_ID"
@@ -118,9 +140,9 @@ steps:
         terraform apply -auto-approve -input=false tfplan
 
         echo ""
-        echo "━━━ Outputs ━━━"
+        echo "━━━ Outputs de la infraestructura ━━━"
         terraform output
-    waitFor: ["push-proxy-image", "upload-backend-code"]
+    waitFor: ["push-proxy-image", "upload-backend-code", "get-gcp-token"]
 
 images:
   - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
