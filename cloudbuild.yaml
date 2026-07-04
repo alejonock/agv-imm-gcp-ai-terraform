@@ -1,28 +1,9 @@
-# =============================================================================
-# cloudbuild.yaml
-#
-# PRE-REQUISITO (una sola vez antes de la primera ejecución):
-#   gsutil mb -l europe-west1 gs://TU_PROYECTO-tf-state
-#   gsutil versioning set on gs://TU_PROYECTO-tf-state
-#
-# VARIABLES DE SUSTITUCIÓN en el Trigger de Cloud Build:
-#   _TF_STATE_BUCKET  → bucket del Terraform state  (ej: "mi-proyecto-tf-state")
-#   _BUCKET_NAME      → bucket del código del backend
-#   _JIRA_API_KEY     → clave secreta compartida con Jira
-#   _REGION           → región GCP (default: europe-west1)
-# =============================================================================
-
 substitutions:
   _REGION: "europe-west1"
   _TF_VERSION: "1.7.0"
 
 steps:
 
-  # ---------------------------------------------------------------------------
-  # BLOQUE A — Corren en paralelo desde el inicio
-  # ---------------------------------------------------------------------------
-
-  # A1: Construye la imagen Docker del proxy OAuth
   - id: "build-proxy-image"
     name: "gcr.io/cloud-builders/docker"
     args:
@@ -34,7 +15,6 @@ steps:
       - ./cloud_run_proxy
     waitFor: ["-"]
 
-  # A2: Crea el bucket del código del backend si no existe
   - id: "ensure-backend-bucket"
     name: "gcr.io/cloud-builders/gcloud"
     entrypoint: "bash"
@@ -51,17 +31,11 @@ steps:
         fi
     waitFor: ["-"]
 
-  # ---------------------------------------------------------------------------
-  # BLOQUE B — Dependen del bloque A
-  # ---------------------------------------------------------------------------
-
-  # B1: Sube la imagen Docker al Container Registry
   - id: "push-proxy-image"
     name: "gcr.io/cloud-builders/docker"
     args: ["push", "--all-tags", "gcr.io/$PROJECT_ID/oauth-proxy"]
     waitFor: ["build-proxy-image"]
 
-  # B2: Sube el código Python del backend al bucket de GCS
   - id: "upload-backend-code"
     name: "gcr.io/cloud-builders/gcloud"
     entrypoint: "bash"
@@ -70,24 +44,9 @@ steps:
       - |
         set -e
         gsutil -m cp -r backend_gce/* gs://$_BUCKET_NAME/backend_gce/
-        echo "✅ Código del backend subido a gs://$_BUCKET_NAME/backend_gce/"
+        echo "✅ Código del backend subido"
     waitFor: ["ensure-backend-bucket"]
 
-  # ---------------------------------------------------------------------------
-  # BLOQUE C — Terraform completo
-  #
-  # ¿Por qué usamos gcr.io/cloud-builders/gcloud en vez de hashicorp/terraform?
-  #
-  # El contenedor de hashicorp/terraform es Alpine Linux y no tiene acceso
-  # automático a las credenciales del SA de Cloud Build. En cambio,
-  # gcr.io/cloud-builders/gcloud es la imagen oficial de Cloud Build y tiene
-  # las credenciales del SA configuradas automáticamente mediante ADC
-  # (Application Default Credentials), sin necesidad de pasar tokens ni
-  # archivos de clave.
-  #
-  # Instalamos Terraform dentro de este contenedor al inicio del paso.
-  # El tiempo extra es ~15 segundos (descarga puntual en cada build).
-  # ---------------------------------------------------------------------------
   - id: "terraform-deploy"
     name: "gcr.io/cloud-builders/gcloud"
     dir: "terraform"
@@ -99,16 +58,22 @@ steps:
 
         # ── Instalar Terraform ──────────────────────────────────────────────
         echo "📦 Instalando Terraform $_TF_VERSION..."
-        # - Adiciona Unzip ---------
-        apt-get update
-        apt-get install -y unzip
         curl -fsSL \
           https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
           -o /tmp/terraform.zip
+        apt-get install -y unzip -qq
         unzip -q /tmp/terraform.zip -d /tmp/
         mv /tmp/terraform /usr/local/bin/terraform
-        terraform version
         echo "✅ Terraform instalado"
+
+        # ── DIAGNÓSTICO: verificar bucket y credenciales ────────────────────
+        echo ""
+        echo "━━━ DIAGNÓSTICO ━━━"
+        echo "PROJECT_ID     : $PROJECT_ID"
+        echo "TF_STATE_BUCKET: [$_TF_STATE_BUCKET]"
+        echo "Probando acceso al bucket..."
+        gsutil ls gs://$_TF_STATE_BUCKET && echo "✅ Bucket accesible" || echo "❌ Bucket NO accesible"
+        echo "━━━━━━━━━━━━━━━━━━"
 
         # ── [1/5] Generar terraform.tfvars ─────────────────────────────────
         echo ""
@@ -124,11 +89,17 @@ steps:
         echo "✅ terraform.tfvars generado"
 
         # ── [2/5] Terraform Init ────────────────────────────────────────────
+        # Usamos un archivo backend.hcl en lugar de pasar el bucket
+        # por línea de comandos, para evitar problemas de escaping
         echo ""
         echo "━━━ [2/5] Terraform Init ━━━"
-        terraform init \
-          -backend-config="bucket=$_TF_STATE_BUCKET" \
-          -input=false
+        echo "Escribiendo backend.hcl con bucket: $_TF_STATE_BUCKET"
+        cat > /tmp/backend.hcl <<EOF
+        bucket = "$_TF_STATE_BUCKET"
+        prefix = "ia-gcp/state"
+        EOF
+        cat /tmp/backend.hcl
+        terraform init -backend-config=/tmp/backend.hcl -input=false
         echo "✅ Init completado"
 
         # ── [3/5] Terraform Validate ────────────────────────────────────────
@@ -147,9 +118,8 @@ steps:
         echo "━━━ [5/5] Terraform Apply ━━━"
         terraform apply -auto-approve -input=false tfplan
 
-        # ── Outputs ─────────────────────────────────────────────────────────
         echo ""
-        echo "━━━ Outputs de la infraestructura ━━━"
+        echo "━━━ Outputs ━━━"
         terraform output
     waitFor: ["push-proxy-image", "upload-backend-code"]
 
