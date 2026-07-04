@@ -1,9 +1,15 @@
 # =============================================================================
 # cloudbuild.yaml
 #
+# PRE-REQUISITO (una sola vez antes de la primera ejecución):
+#   Crea el bucket del Terraform state manualmente:
+#
+#   gsutil mb -l europe-west1 gs://TU_PROYECTO-tf-state
+#   gsutil versioning set on gs://TU_PROYECTO-tf-state
+#
 # VARIABLES DE SUSTITUCIÓN (configúralas en el Trigger de Cloud Build):
-#   _TF_STATE_BUCKET  → bucket para el Terraform state  (ej: "proyecto-tf-state")
-#   _BUCKET_NAME      → bucket para el código del backend (ej: "proyecto-ia-backend-src")
+#   _TF_STATE_BUCKET  → nombre del bucket del state (ej: "mi-proyecto-tf-state")
+#   _BUCKET_NAME      → nombre del bucket del código del backend
 #   _JIRA_API_KEY     → clave secreta compartida con Jira
 #   _REGION           → región GCP (default: europe-west1)
 # =============================================================================
@@ -30,26 +36,7 @@ steps:
       - ./cloud_run_proxy
     waitFor: ["-"]
 
-  # A2: Crea el bucket del Terraform state si no existe
-  - id: "ensure-state-bucket"
-    name: "gcr.io/cloud-builders/gsutil"
-    entrypoint: "bash"
-    args:
-      - -c
-      - |
-        set -e
-        BUCKET="gs://$_TF_STATE_BUCKET"
-        if gsutil ls "$$BUCKET" > /dev/null 2>&1; then
-          echo "✅ Bucket del state ya existe: $$BUCKET"
-        else
-          echo "🆕 Creando bucket del state: $$BUCKET"
-          gsutil mb -l $_REGION "$$BUCKET"
-          gsutil versioning set on "$$BUCKET"
-          echo "✅ Bucket del state creado con versionado activado"
-        fi
-    waitFor: ["-"]
-
-  # A3: Crea el bucket del código del backend si no existe
+  # A2: Crea el bucket del código del backend si no existe
   - id: "ensure-backend-bucket"
     name: "gcr.io/cloud-builders/gsutil"
     entrypoint: "bash"
@@ -71,13 +58,13 @@ steps:
   # BLOQUE B — Dependen del bloque A
   # ---------------------------------------------------------------------------
 
-  # B1: Sube la imagen Docker (espera al build)
+  # B1: Sube la imagen Docker al Container Registry
   - id: "push-proxy-image"
     name: "gcr.io/cloud-builders/docker"
     args: ["push", "--all-tags", "gcr.io/$PROJECT_ID/oauth-proxy"]
     waitFor: ["build-proxy-image"]
 
-  # B2: Sube el código Python del backend (espera a que el bucket exista)
+  # B2: Sube el código Python del backend al bucket de GCS
   - id: "upload-backend-code"
     name: "gcr.io/cloud-builders/gsutil"
     args: ["-m", "cp", "-r", "backend_gce/*", "gs://$_BUCKET_NAME/backend_gce/"]
@@ -86,14 +73,9 @@ steps:
   # ---------------------------------------------------------------------------
   # BLOQUE C — Terraform completo en un solo paso
   #
-  # ¿Por qué un solo paso?
-  #   Cada paso de Cloud Build corre en un contenedor aislado. Terraform
-  #   descarga los providers durante "init" al directorio .terraform/.
-  #   Si init y validate corren en contenedores distintos, el segundo
-  #   contenedor arranca sin los providers ya descargados y falla.
-  #   Al correr todo en un mismo paso con "set -e", cualquier error
-  #   detiene la ejecución inmediatamente y los providers siempre están
-  #   disponibles para los comandos siguientes.
+  # Todo en un contenedor para que los providers descargados en "init"
+  # estén disponibles en validate, plan y apply.
+  # set -e detiene todo si cualquier comando falla.
   # ---------------------------------------------------------------------------
   - id: "terraform-deploy"
     name: "hashicorp/terraform:$_TF_VERSION"
@@ -102,7 +84,7 @@ steps:
     args:
       - -c
       - |
-        set -e   # Detiene el script inmediatamente si cualquier comando falla
+        set -e
 
         echo "━━━ [1/5] Generando terraform.tfvars ━━━"
         cat > terraform.tfvars <<EOF
@@ -116,7 +98,7 @@ steps:
         echo "✅ terraform.tfvars generado"
 
         echo ""
-        echo "━━━ [2/5] Terraform Init (descarga providers + conecta al state) ━━━"
+        echo "━━━ [2/5] Terraform Init ━━━"
         terraform init \
           -backend-config="bucket=$_TF_STATE_BUCKET" \
           -input=false
@@ -136,9 +118,9 @@ steps:
         terraform apply -auto-approve -input=false tfplan
 
         echo ""
-        echo "━━━ Outputs de la infraestructura ━━━"
+        echo "━━━ Outputs ━━━"
         terraform output
-    waitFor: ["push-proxy-image", "upload-backend-code", "ensure-state-bucket"]
+    waitFor: ["push-proxy-image", "upload-backend-code"]
 
 images:
   - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
