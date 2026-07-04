@@ -100,6 +100,7 @@ steps:
         # ── Instalar Terraform ──────────────────────────────────────────────
         echo "📦 Instalando Terraform $_TF_VERSION..."
         # - Adiciona Unzip ---------
+        cat /etc/os-release
         apt-get install -y unzip
         curl -fsSL \
           https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
