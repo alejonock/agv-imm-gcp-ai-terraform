@@ -130,20 +130,20 @@ data "google_service_account" "backend_sa" {
 resource "google_project_iam_member" "backend_sa_storage" {
   project = var.project_id
   role    = "roles/storage.objectViewer"
-  member  = "serviceAccount:${google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
 }
 
 # El backend SA necesita escribir logs y métricas
 resource "google_project_iam_member" "backend_sa_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
 }
 
 resource "google_project_iam_member" "backend_sa_monitoring" {
   project = var.project_id
   role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
 }
 
 
@@ -238,7 +238,7 @@ resource "google_compute_instance_template" "backend" {
 
   # Cuenta de servicio de la VM (define los permisos de la VM)
   service_account {
-    email  = google_service_account.backend_sa.email
+    email  = data.google_service_account.backend_sa.email
     scopes = ["cloud-platform"]
   }
 
@@ -255,7 +255,7 @@ resource "google_compute_instance_template" "backend" {
     # URL del servicio Cloud Run (audience del token OIDC)
     # Se actualiza después del primer deploy con un rolling update
     expected-audience        = "https://${var.cloud_run_service_name}-placeholder.run.app"
-    allowed-service-account  = google_service_account.proxy_sa.email
+    allowed-service-account  = data.google_service_account.proxy_sa.email
     app-source-bucket        = google_storage_bucket.backend_code.name
   }
 
@@ -264,7 +264,6 @@ resource "google_compute_instance_template" "backend" {
     create_before_destroy = true
   }
 
-  depends_on = [google_project_service.apis]
 }
 
 
@@ -391,7 +390,7 @@ resource "google_cloud_run_v2_service" "proxy" {
   location = var.region
 
   template {
-    service_account = google_service_account.proxy_sa.email
+    service_account = data.google_service_account.proxy_sa.email
 
     # Configuración de red: usa el VPC Connector para llegar al ILB interno
     vpc_access {
