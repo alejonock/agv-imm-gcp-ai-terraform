@@ -109,6 +109,16 @@ steps:
         terraform validate
         echo "✅ Validación correcta"
 
+        # ── Import de recursos existentes (idempotente) ─────────────────────
+        # Si el bucket del backend ya existía antes del primer apply,
+        # lo importamos al state para que Terraform no intente crearlo
+        # de nuevo. "|| true" evita que falle si el recurso no existe.
+        echo ""
+        echo "━━━ Importando recursos existentes (si aplica) ━━━"
+        terraform import google_storage_bucket.backend_code $_BUCKET_NAME 2>&1 \
+          && echo "✅ Bucket importado al state" \
+          || echo "ℹ️  Bucket no encontrado o ya en state (continuando)"
+
         # ── [4/5] Terraform Plan ────────────────────────────────────────────
         echo ""
         echo "━━━ [4/5] Terraform Plan ━━━"
