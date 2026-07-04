@@ -110,6 +110,35 @@ steps:
         terraform version
         echo "✅ Terraform instalado"
 
+        # ── [1] Crea service account y asigna permisos ─────────────────────
+        # Variables
+        SA_NAME="cloud-run-sa"
+        SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+        echo "━━━ Creando Service Account si no existe ━━━"
+
+        if ! gcloud iam service-accounts describe "${SA_EMAIL}" >/dev/null 2>&1; then
+          echo "Creando ${SA_EMAIL}..."
+          gcloud iam service-accounts create "${SA_NAME}" \
+            --display-name="Cloud Run Service Account"
+        else
+          echo "La Service Account ya existe."
+        fi
+
+        echo "━━━ Asignando permisos al bucket ━━━"
+
+        gcloud storage buckets add-iam-policy-binding gs://$_TF_STATE_BUCKET \
+          --member="serviceAccount:${SA_EMAIL}" \
+          --role="roles/storage.objectAdmin"
+        
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+          --member="serviceAccount:${SA_EMAIL}" \
+          --role="roles/logging.logWriter"
+
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+          --member="serviceAccount:${SA_EMAIL}" \
+          --role="roles/monitoring.metricWriter"
+
         # ── [1/5] Generar terraform.tfvars ─────────────────────────────────
         echo ""
         echo "━━━ [1/5] Generando terraform.tfvars ━━━"
