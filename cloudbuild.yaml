@@ -36,39 +36,19 @@ steps:
 
   # A2: Crea el bucket del código del backend si no existe
   - id: "ensure-backend-bucket"
-    name: "gcr.io/cloud-builders/gsutil"
+    name: "gcr.io/cloud-builders/gcloud"
     entrypoint: "bash"
     args:
       - -c
       - |
         set -e
-        BUCKET="gs://$_BUCKET_NAME"
-        if gsutil ls "$$BUCKET" > /dev/null 2>&1; then
-          echo "✅ Bucket del backend ya existe: $$BUCKET"
+        if gsutil ls gs://$_BUCKET_NAME > /dev/null 2>&1; then
+          echo "✅ Bucket del backend ya existe: gs://$_BUCKET_NAME"
         else
-          echo "🆕 Creando bucket del backend: $$BUCKET"
-          gsutil mb -l $_REGION "$$BUCKET"
+          echo "🆕 Creando bucket del backend..."
+          gsutil mb -l $_REGION gs://$_BUCKET_NAME
           echo "✅ Bucket del backend creado"
         fi
-    waitFor: ["-"]
-
-  # A3: Obtiene el access token del SA de Cloud Build
-  # ---------------------------------------------------
-  # El contenedor de hashicorp/terraform es Alpine Linux y NO tiene
-  # acceso automático a las credenciales de GCP. Este paso usa la imagen
-  # oficial de Google Cloud SDK (que SÍ tiene acceso nativo a las
-  # credenciales de Cloud Build) para obtener el token y guardarlo
-  # en /workspace/gcp_token.txt, que es un directorio compartido entre
-  # todos los pasos del mismo build.
-  - id: "get-gcp-token"
-    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
-    entrypoint: "bash"
-    args:
-      - -c
-      - |
-        set -e
-        gcloud auth print-access-token > /workspace/gcp_token.txt
-        echo "✅ Access token obtenido y guardado en /workspace/gcp_token.txt"
     waitFor: ["-"]
 
   # ---------------------------------------------------------------------------
@@ -83,30 +63,51 @@ steps:
 
   # B2: Sube el código Python del backend al bucket de GCS
   - id: "upload-backend-code"
-    name: "gcr.io/cloud-builders/gsutil"
-    args: ["-m", "cp", "-r", "backend_gce/*", "gs://$_BUCKET_NAME/backend_gce/"]
+    name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
+    args:
+      - -c
+      - |
+        set -e
+        gsutil -m cp -r backend_gce/* gs://$_BUCKET_NAME/backend_gce/
+        echo "✅ Código del backend subido a gs://$_BUCKET_NAME/backend_gce/"
     waitFor: ["ensure-backend-bucket"]
 
   # ---------------------------------------------------------------------------
-  # BLOQUE C — Terraform (espera a que todo el bloque B y el token estén listos)
+  # BLOQUE C — Terraform completo
   #
-  # Lee el token de /workspace/gcp_token.txt y lo exporta como
-  # GOOGLE_OAUTH_ACCESS_TOKEN para que Terraform (backend GCS + provider
-  # google) se autentique con las credenciales del SA de Cloud Build.
+  # ¿Por qué usamos gcr.io/cloud-builders/gcloud en vez de hashicorp/terraform?
+  #
+  # El contenedor de hashicorp/terraform es Alpine Linux y no tiene acceso
+  # automático a las credenciales del SA de Cloud Build. En cambio,
+  # gcr.io/cloud-builders/gcloud es la imagen oficial de Cloud Build y tiene
+  # las credenciales del SA configuradas automáticamente mediante ADC
+  # (Application Default Credentials), sin necesidad de pasar tokens ni
+  # archivos de clave.
+  #
+  # Instalamos Terraform dentro de este contenedor al inicio del paso.
+  # El tiempo extra es ~15 segundos (descarga puntual en cada build).
   # ---------------------------------------------------------------------------
   - id: "terraform-deploy"
-    name: "hashicorp/terraform:$_TF_VERSION"
+    name: "gcr.io/cloud-builders/gcloud"
     dir: "terraform"
-    entrypoint: "sh"
+    entrypoint: "bash"
     args:
       - -c
       - |
         set -e
 
-        echo "━━━ Cargando credenciales GCP ━━━"
-        export GOOGLE_OAUTH_ACCESS_TOKEN=$(cat /workspace/gcp_token.txt)
-        echo "✅ Credenciales cargadas"
+        # ── Instalar Terraform ──────────────────────────────────────────────
+        echo "📦 Instalando Terraform $_TF_VERSION..."
+        curl -fsSL \
+          https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
+          -o /tmp/terraform.zip
+        unzip -q /tmp/terraform.zip -d /tmp/
+        mv /tmp/terraform /usr/local/bin/terraform
+        terraform version
+        echo "✅ Terraform instalado"
 
+        # ── [1/5] Generar terraform.tfvars ─────────────────────────────────
         echo ""
         echo "━━━ [1/5] Generando terraform.tfvars ━━━"
         cat > terraform.tfvars <<EOF
@@ -119,6 +120,7 @@ steps:
         EOF
         echo "✅ terraform.tfvars generado"
 
+        # ── [2/5] Terraform Init ────────────────────────────────────────────
         echo ""
         echo "━━━ [2/5] Terraform Init ━━━"
         terraform init \
@@ -126,23 +128,27 @@ steps:
           -input=false
         echo "✅ Init completado"
 
+        # ── [3/5] Terraform Validate ────────────────────────────────────────
         echo ""
         echo "━━━ [3/5] Terraform Validate ━━━"
         terraform validate
         echo "✅ Validación correcta"
 
+        # ── [4/5] Terraform Plan ────────────────────────────────────────────
         echo ""
         echo "━━━ [4/5] Terraform Plan ━━━"
         terraform plan -out=tfplan -input=false
 
+        # ── [5/5] Terraform Apply ───────────────────────────────────────────
         echo ""
         echo "━━━ [5/5] Terraform Apply ━━━"
         terraform apply -auto-approve -input=false tfplan
 
+        # ── Outputs ─────────────────────────────────────────────────────────
         echo ""
         echo "━━━ Outputs de la infraestructura ━━━"
         terraform output
-    waitFor: ["push-proxy-image", "upload-backend-code", "get-gcp-token"]
+    waitFor: ["push-proxy-image", "upload-backend-code"]
 
 images:
   - "gcr.io/$PROJECT_ID/oauth-proxy:$COMMIT_SHA"
