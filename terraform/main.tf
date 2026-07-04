@@ -46,22 +46,10 @@ provider "google-beta" {
 
 # -----------------------------------------------------------------------------
 # 3. APIs DE GCP
-# Habilitamos solo las APIs que necesitamos.
+# Las APIs se habilitan manualmente antes del primer despliegue (ver guía).
+# No se gestionan con Terraform para evitar requerir permisos de serviceusage.
+# Comando: gcloud services enable compute.googleapis.com run.googleapis.com ...
 # -----------------------------------------------------------------------------
-resource "google_project_service" "apis" {
-  for_each = toset([
-    "compute.googleapis.com",        # Compute Engine (VMs, MIG, LB)
-    "run.googleapis.com",            # Cloud Run
-    "iam.googleapis.com",            # Cuentas de servicio
-    "vpcaccess.googleapis.com",      # Conector VPC Serverless
-    "storage.googleapis.com",        # Cloud Storage
-    "cloudbuild.googleapis.com",     # Cloud Build (para la pipeline)
-    "containerregistry.googleapis.com", # Container Registry (imágenes Docker)
-  ])
-
-  service            = each.value
-  disable_on_destroy = false # No deshabilitamos la API si borramos el recurso
-}
 
 
 # -----------------------------------------------------------------------------
@@ -72,7 +60,6 @@ resource "google_compute_network" "vpc" {
   name                    = var.vpc_name
   auto_create_subnetworks = false # Creamos las subredes manualmente (más control)
 
-  depends_on = [google_project_service.apis]
 }
 
 # Subred principal donde vivirán las instancias del MIG y el LB
@@ -129,16 +116,14 @@ resource "google_compute_firewall" "allow_internal" {
 # que necesita.
 # -----------------------------------------------------------------------------
 
-# Cuenta de servicio para el proxy Cloud Run
-resource "google_service_account" "proxy_sa" {
-  account_id   = "oauth-proxy-sa"
-  display_name = "Cloud Run - OAuth Proxy"
+# Las service accounts se crean manualmente antes del primer despliegue
+# (ver guía, Paso 1) y Terraform las lee con data sources.
+data "google_service_account" "proxy_sa" {
+  account_id = "oauth-proxy-sa"
 }
 
-# Cuenta de servicio para las instancias del backend (MIG)
-resource "google_service_account" "backend_sa" {
-  account_id   = "ia-backend-sa"
-  display_name = "IA Backend (GCE MIG)"
+data "google_service_account" "backend_sa" {
+  account_id = "ia-backend-sa"
 }
 
 # El backend SA necesita leer del bucket de Cloud Storage (para el startup-script)
@@ -203,7 +188,6 @@ resource "google_vpc_access_connector" "connector" {
   min_instances = 2
   max_instances = 3
 
-  depends_on = [google_project_service.apis]
 }
 
 
@@ -445,7 +429,6 @@ resource "google_cloud_run_v2_service" "proxy" {
   }
 
   depends_on = [
-    google_project_service.apis,
     google_vpc_access_connector.connector,
     google_compute_forwarding_rule.backend,
   ]

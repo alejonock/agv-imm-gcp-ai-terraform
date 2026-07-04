@@ -110,14 +110,20 @@ steps:
         echo "✅ Validación correcta"
 
         # ── Import de recursos existentes (idempotente) ─────────────────────
-        # Si el bucket del backend ya existía antes del primer apply,
-        # lo importamos al state para que Terraform no intente crearlo
-        # de nuevo. "|| true" evita que falle si el recurso no existe.
+        # Importamos recursos que existen pero Terraform aún no gestiona.
+        # "|| true" evita que falle si ya están en el state.
         echo ""
-        echo "━━━ Importando recursos existentes (si aplica) ━━━"
-        terraform import google_storage_bucket.backend_code $_BUCKET_NAME 2>&1 \
-          && echo "✅ Bucket importado al state" \
-          || echo "ℹ️  Bucket no encontrado o ya en state (continuando)"
+        echo "━━━ Importando recursos existentes al state ━━━"
+
+        # Bucket del backend (creado por ensure-backend-bucket)
+        terraform import google_storage_bucket.backend_code $_BUCKET_NAME 2>&1           && echo "✅ Bucket importado"           || echo "ℹ️  Bucket ya en state o no existe aún"
+
+        # Service accounts (creadas manualmente antes del primer deploy)
+        terraform import           "data.google_service_account.proxy_sa"           "projects/$PROJECT_ID/serviceAccounts/oauth-proxy-sa@$PROJECT_ID.iam.gserviceaccount.com"           2>&1 || true
+
+        terraform import           "data.google_service_account.backend_sa"           "projects/$PROJECT_ID/serviceAccounts/ia-backend-sa@$PROJECT_ID.iam.gserviceaccount.com"           2>&1 || true
+
+        echo "✅ Imports completados"
 
         # ── [4/5] Terraform Plan ────────────────────────────────────────────
         echo ""
