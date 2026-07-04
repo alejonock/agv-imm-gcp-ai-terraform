@@ -13,7 +13,18 @@
 #
 # La configuración del backend está en backend.tf.
 #
+# Orden lógico:
+#   1. Providers (conexión con GCP)
+#   2. APIs que necesitamos habilitar
+#   3. Red: VPC, subred, firewall
+#   4. Cuentas de servicio (identidades de los servicios)
+#   5. Cloud Storage (código del backend)
+#   6. VPC Access Connector (para que Cloud Run llegue a la VPC)
+#   7. Compute Engine: plantilla + MIG + autoscaling + health check
+#   8. Internal Load Balancer
+#   9. Cloud Run (proxy OAuth)
 # =============================================================================
+
 
 # -----------------------------------------------------------------------------
 # 1. PROVIDERS
@@ -32,8 +43,9 @@ provider "google-beta" {
   region  = var.region
 }
 
+
 # -----------------------------------------------------------------------------
-# 2. APIs DE GCP
+# 3. APIs DE GCP
 # Habilitamos solo las APIs que necesitamos.
 # -----------------------------------------------------------------------------
 resource "google_project_service" "apis" {
@@ -53,7 +65,7 @@ resource "google_project_service" "apis" {
 
 
 # -----------------------------------------------------------------------------
-# 3. RED: VPC
+# 4. RED: VPC
 # Una red virtual privada aislada para todos nuestros recursos.
 # -----------------------------------------------------------------------------
 resource "google_compute_network" "vpc" {
@@ -111,7 +123,7 @@ resource "google_compute_firewall" "allow_internal" {
 
 
 # -----------------------------------------------------------------------------
-# 4. CUENTAS DE SERVICIO
+# 5. CUENTAS DE SERVICIO
 # Son como "usuarios" para los servicios (no para personas).
 # Principio de mínimo privilegio: cada servicio solo tiene los permisos
 # que necesita.
@@ -151,7 +163,7 @@ resource "google_project_iam_member" "backend_sa_monitoring" {
 
 
 # -----------------------------------------------------------------------------
-# 5. CLOUD STORAGE
+# 6. CLOUD STORAGE
 # Bucket donde guardamos el código Python del backend.
 # El startup-script de cada VM descargará el código desde aquí al arrancar.
 # -----------------------------------------------------------------------------
@@ -174,7 +186,7 @@ resource "google_storage_bucket" "backend_code" {
 
 
 # -----------------------------------------------------------------------------
-# 6. VPC ACCESS CONNECTOR
+# 7. VPC ACCESS CONNECTOR
 # Permite que Cloud Run (que vive fuera de nuestra VPC) se comunique con
 # recursos internos (el Internal Load Balancer).
 # -----------------------------------------------------------------------------
@@ -196,7 +208,7 @@ resource "google_vpc_access_connector" "connector" {
 
 
 # -----------------------------------------------------------------------------
-# 7. HEALTH CHECK
+# 8. HEALTH CHECK
 # GCP comprueba periódicamente si las VMs están sanas llamando a /healthz.
 # Si una VM no responde, el MIG la reemplaza automáticamente.
 # -----------------------------------------------------------------------------
@@ -216,7 +228,7 @@ resource "google_compute_health_check" "backend_hc" {
 
 
 # -----------------------------------------------------------------------------
-# 8. INSTANCE TEMPLATE (plantilla de VM)
+# 9. INSTANCE TEMPLATE (plantilla de VM)
 # Define cómo debe ser cada instancia del MIG:
 # sistema operativo, tipo de máquina, GPU, cuenta de servicio, etc.
 # Cuando cambias la plantilla, el MIG actualiza las VMs una a una (rolling update).
@@ -254,7 +266,7 @@ resource "google_compute_instance_template" "backend" {
   # Metadata que el startup-script lee para configurarse
   metadata = {
     # El startup-script se ejecuta la primera vez que arranca la VM
-    startup-script = templatefile("${path.module}/../backend_gce/startup-script.sh", {})
+    startup-script = file("${path.module}/../backend_gce/startup-script.sh")
 
     # URL del servicio Cloud Run (audience del token OIDC)
     # Se actualiza después del primer deploy con un rolling update
@@ -273,7 +285,7 @@ resource "google_compute_instance_template" "backend" {
 
 
 # -----------------------------------------------------------------------------
-# 9. MANAGED INSTANCE GROUP (MIG) REGIONAL - MULTI-ZONA
+# 10. MANAGED INSTANCE GROUP (MIG) REGIONAL - MULTI-ZONA
 # El MIG gestiona automáticamente un grupo de VMs idénticas.
 # "Regional" significa que reparte las VMs entre las zonas disponibles
 # de la región para conseguir alta disponibilidad (SLO 99.95%).
@@ -294,7 +306,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
   # Usa el health check para autohealing (reemplazar VMs no sanas)
   auto_healing_policies {
     health_check      = google_compute_health_check.backend_hc.id
-    initial_delay_sec = 300 # Espera 5 min antes del primer health check
+    initial_delay_sec = 300 # Espera 5 min antes del primer health check (boot + GPU init)
   }
 
   named_port {
@@ -332,7 +344,7 @@ resource "google_compute_region_autoscaler" "backend" {
 
 
 # -----------------------------------------------------------------------------
-# 10. INTERNAL HTTP(S) LOAD BALANCER
+# 11. INTERNAL HTTP(S) LOAD BALANCER
 # Distribuye el tráfico entre las VMs del MIG.
 # Es "interno": solo accesible desde dentro de la VPC (no desde Internet).
 # Componentes (de atrás hacia adelante):
@@ -386,7 +398,7 @@ resource "google_compute_forwarding_rule" "backend" {
 
 
 # -----------------------------------------------------------------------------
-# 11. CLOUD RUN - PROXY OAUTH
+# 12. CLOUD RUN - PROXY OAUTH
 # El proxy que recibe las peticiones de Jira, obtiene el token OIDC
 # y las reenvía al backend de IA.
 # -----------------------------------------------------------------------------
