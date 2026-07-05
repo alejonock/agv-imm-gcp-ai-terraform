@@ -287,8 +287,8 @@ resource "google_compute_region_instance_group_manager" "mig" {
     # En un MIG regional con 3 zonas, max_surge debe ser 0 o >= 3.
     # Usamos 0 (sin surge) + 1 no disponible: actualiza de una en una
     # sin crear instancias extra, lo que reduce coste durante updates.
-    max_surge_fixed       = 0
-    max_unavailable_fixed = 0
+    max_surge_fixed       = 3  # >= número de zonas (europe-west1 tiene 3)
+    max_unavailable_fixed = 0  # sin downtime durante updates
   }
 
   depends_on = [google_compute_health_check.backend_hc]
