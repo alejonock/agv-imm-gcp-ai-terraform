@@ -288,7 +288,7 @@ resource "google_compute_region_instance_group_manager" "mig" {
     # Usamos 0 (sin surge) + 1 no disponible: actualiza de una en una
     # sin crear instancias extra, lo que reduce coste durante updates.
     max_surge_fixed       = 0
-    max_unavailable_fixed = 1
+    max_unavailable_fixed = 0
   }
 
   depends_on = [google_compute_health_check.backend_hc]
