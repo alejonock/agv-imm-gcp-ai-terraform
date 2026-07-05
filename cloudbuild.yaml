@@ -61,6 +61,7 @@ steps:
         curl -fsSL \
           https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
           -o /tmp/terraform.zip
+        apt-get update
         apt-get install -y unzip -qq
         unzip -q /tmp/terraform.zip -d /tmp/
         mv /tmp/terraform /usr/local/bin/terraform
