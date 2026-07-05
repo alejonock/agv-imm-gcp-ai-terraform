@@ -56,12 +56,17 @@ steps:
       - |
         set -e
 
+        # ── Identidad activa (diagnóstico) ─────────────────────────────────
+        echo "=== IDENTIDAD ACTIVA EN CLOUD BUILD ==="
+        gcloud auth list
+        gcloud config get-value account
+        echo "======================================="
+
         # ── Instalar Terraform ──────────────────────────────────────────────
         echo "📦 Instalando Terraform $_TF_VERSION..."
         curl -fsSL \
           https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
           -o /tmp/terraform.zip
-        # - Instalar paquetes -
         apt-get update
         apt-get install -y unzip -qq
         unzip -q /tmp/terraform.zip -d /tmp/
