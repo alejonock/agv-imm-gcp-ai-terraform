@@ -164,13 +164,13 @@ resource "google_vpc_access_connector" "connector" {
   name   = "ia-vpc-connector"
   region = var.region
 
-  subnet {
-    name = google_compute_subnetwork.main.name
-  }
+  # El conector requiere una subred /28 dedicada.
+  # Usamos ip_cidr_range para que cree su propio bloque /28 dentro de la VPC.
+  network       = google_compute_network.vpc.name
+  ip_cidr_range = "10.10.2.0/28"
 
   min_instances = 2
   max_instances = 3
-
 }
 
 
@@ -284,8 +284,11 @@ resource "google_compute_region_instance_group_manager" "mig" {
   update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
-    max_surge_fixed       = 1 # Crea 1 VM nueva antes de borrar la vieja
-    max_unavailable_fixed = 0 # Nunca deja el MIG sin capacidad
+    # En un MIG regional con 3 zonas, max_surge debe ser 0 o >= 3.
+    # Usamos 0 (sin surge) + 1 no disponible: actualiza de una en una
+    # sin crear instancias extra, lo que reduce coste durante updates.
+    max_surge_fixed       = 0
+    max_unavailable_fixed = 1
   }
 
   depends_on = [google_compute_health_check.backend_hc]
