@@ -50,7 +50,7 @@ app = FastAPI(title="Backend IA - Resolución de Incidencias", version="1.0.0")
 # Debe coincidir EXACTAMENTE con la URL usada como "audience" al pedir el
 # token en el proxy de Cloud Run (normalmente la URL pública del propio
 # servicio Cloud Run, ej: https://oauth-proxy-xxxxx-ew.a.run.app)
-EXPECTED_AUDIENCE = os.environ.get("EXPECTED_AUDIENCE", "")
+EXPECTED_AUDIENCE = os.environ.get("https://oauth-proxy-2r5kgbc6ca-ew.a.run.app", "")
 
 # Email de la cuenta de servicio que usa el servicio Cloud Run.
 # Solo se aceptan tokens emitidos para esta identidad.
