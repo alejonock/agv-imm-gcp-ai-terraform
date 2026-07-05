@@ -419,11 +419,6 @@ resource "google_cloud_run_v2_service" "proxy" {
   ]
 }
 
-# Permite que cualquiera llame al Cloud Run sin autenticación de Google
-# (la autenticación la hace nuestro proxy con la API Key de Jira)
-resource "google_cloud_run_v2_service_iam_member" "public" {
-  name     = google_cloud_run_v2_service.proxy.name
-  location = var.region
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
+# El permiso allUsers para Cloud Run se aplica manualmente (ver guía):
+#   gcloud run services add-iam-policy-binding oauth-proxy \
+#     --region=europe-west1 --member="allUsers" --role="roles/run.invoker"
