@@ -124,25 +124,10 @@ locals {
   backend_sa_email = "ia-backend-sa@${var.project_id}.iam.gserviceaccount.com"
 }
 
-# El backend SA necesita leer del bucket de Cloud Storage (para el startup-script)
-resource "google_project_iam_member" "backend_sa_storage" {
-  project = var.project_id
-  role    = "roles/storage.objectViewer"
-  member  = "serviceAccount:${local.backend_sa_email}"
-}
-
-# El backend SA necesita escribir logs y métricas
-resource "google_project_iam_member" "backend_sa_logging" {
-  project = var.project_id
-  role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${local.backend_sa_email}"
-}
-
-resource "google_project_iam_member" "backend_sa_monitoring" {
-  project = var.project_id
-  role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${local.backend_sa_email}"
-}
+# Roles del backend SA asignados manualmente (ver guía de despliegue):
+#   gcloud projects add-iam-policy-binding PROJECT --role=roles/storage.objectViewer ...
+#   gcloud projects add-iam-policy-binding PROJECT --role=roles/logging.logWriter ...
+#   gcloud projects add-iam-policy-binding PROJECT --role=roles/monitoring.metricWriter ...
 
 
 # -----------------------------------------------------------------------------
