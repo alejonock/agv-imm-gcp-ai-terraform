@@ -116,34 +116,32 @@ resource "google_compute_firewall" "allow_internal" {
 # que necesita.
 # -----------------------------------------------------------------------------
 
-# Las service accounts se crean manualmente antes del primer despliegue
-# (ver guía, Paso 1) y Terraform las lee con data sources.
-data "google_service_account" "proxy_sa" {
-  account_id = "oauth-proxy-sa"
-}
-
-data "google_service_account" "backend_sa" {
-  account_id = "ia-backend-sa"
+# Las service accounts se crean manualmente antes del primer despliegue.
+# Construimos el email directamente (formato estándar de GCP) sin necesidad
+# de llamar a la API de IAM, evitando requerir iam.serviceAccounts.get.
+locals {
+  proxy_sa_email   = "oauth-proxy-sa@${var.project_id}.iam.gserviceaccount.com"
+  backend_sa_email = "ia-backend-sa@${var.project_id}.iam.gserviceaccount.com"
 }
 
 # El backend SA necesita leer del bucket de Cloud Storage (para el startup-script)
 resource "google_project_iam_member" "backend_sa_storage" {
   project = var.project_id
   role    = "roles/storage.objectViewer"
-  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${local.backend_sa_email}"
 }
 
 # El backend SA necesita escribir logs y métricas
 resource "google_project_iam_member" "backend_sa_logging" {
   project = var.project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${local.backend_sa_email}"
 }
 
 resource "google_project_iam_member" "backend_sa_monitoring" {
   project = var.project_id
   role    = "roles/monitoring.metricWriter"
-  member  = "serviceAccount:${data.google_service_account.backend_sa.email}"
+  member  = "serviceAccount:${local.backend_sa_email}"
 }
 
 
@@ -238,7 +236,7 @@ resource "google_compute_instance_template" "backend" {
 
   # Cuenta de servicio de la VM (define los permisos de la VM)
   service_account {
-    email  = data.google_service_account.backend_sa.email
+    email  = local.backend_sa_email
     scopes = ["cloud-platform"]
   }
 
@@ -255,7 +253,7 @@ resource "google_compute_instance_template" "backend" {
     # URL del servicio Cloud Run (audience del token OIDC)
     # Se actualiza después del primer deploy con un rolling update
     expected-audience        = "https://${var.cloud_run_service_name}-placeholder.run.app"
-    allowed-service-account  = data.google_service_account.proxy_sa.email
+    allowed-service-account  = local.proxy_sa_email
     app-source-bucket        = google_storage_bucket.backend_code.name
   }
 
@@ -390,7 +388,7 @@ resource "google_cloud_run_v2_service" "proxy" {
   location = var.region
 
   template {
-    service_account = data.google_service_account.proxy_sa.email
+    service_account = local.proxy_sa_email
 
     # Configuración de red: usa el VPC Connector para llegar al ILB interno
     vpc_access {

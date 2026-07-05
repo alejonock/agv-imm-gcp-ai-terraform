@@ -18,12 +18,12 @@ output "internal_lb_ip" {
 
 output "proxy_service_account" {
   description = "Email de la cuenta de servicio del proxy. Úsala como 'allowed-service-account' en el instance template."
-  value       = data.google_service_account.proxy_sa.email
+  value       = local.proxy_sa_email
 }
 
 output "backend_service_account" {
   description = "Email de la cuenta de servicio del backend (instancias del MIG)."
-  value       = data.google_service_account.backend_sa.email
+  value       = local.backend_sa_email
 }
 
 output "backend_code_bucket" {

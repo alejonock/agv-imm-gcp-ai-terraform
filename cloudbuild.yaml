@@ -61,7 +61,6 @@ steps:
         curl -fsSL \
           https://releases.hashicorp.com/terraform/$_TF_VERSION/terraform_${_TF_VERSION}_linux_amd64.zip \
           -o /tmp/terraform.zip
-        apt-get update
         apt-get install -y unzip -qq
         unzip -q /tmp/terraform.zip -d /tmp/
         mv /tmp/terraform /usr/local/bin/terraform
@@ -109,21 +108,14 @@ steps:
         terraform validate
         echo "✅ Validación correcta"
 
-        # ── Import de recursos existentes (idempotente) ─────────────────────
-        # Importamos recursos que existen pero Terraform aún no gestiona.
-        # "|| true" evita que falle si ya están en el state.
+        # ── Import del bucket si ya existe (idempotente) ──────────────────
+        # El bucket puede existir del paso ensure-backend-bucket.
+        # Si ya está en el state (runs anteriores), el import falla con
+        # "already managed" y continuamos igualmente.
         echo ""
-        echo "━━━ Importando recursos existentes al state ━━━"
-
-        # Bucket del backend (creado por ensure-backend-bucket)
-        terraform import google_storage_bucket.backend_code $_BUCKET_NAME 2>&1           && echo "✅ Bucket importado"           || echo "ℹ️  Bucket ya en state o no existe aún"
-
-        # Service accounts (creadas manualmente antes del primer deploy)
-        terraform import           "data.google_service_account.proxy_sa"           "projects/$PROJECT_ID/serviceAccounts/oauth-proxy-sa@$PROJECT_ID.iam.gserviceaccount.com"           2>&1 || true
-
-        terraform import           "data.google_service_account.backend_sa"           "projects/$PROJECT_ID/serviceAccounts/ia-backend-sa@$PROJECT_ID.iam.gserviceaccount.com"           2>&1 || true
-
-        echo "✅ Imports completados"
+        echo "━━━ Importando bucket si no está en el state ━━━"
+        terraform import google_storage_bucket.backend_code $_BUCKET_NAME 2>&1           | grep -v "already managed"           || true
+        echo "✅ Import completado"
 
         # ── [4/5] Terraform Plan ────────────────────────────────────────────
         echo ""
